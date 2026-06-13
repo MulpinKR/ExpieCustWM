@@ -30,7 +30,7 @@ impl BindingManager {
         let ks_per_kc = mapping.keysyms_per_keycode as usize;
 
         for kb in &config.keybindings {
-            let mut mask: u16 = u16::from(mod_mask);
+            let mut mask: u16 = 0;
             for m in &kb.mods {
                 let m = x11::mod_string_to_mask(m);
                 if m != 0 {

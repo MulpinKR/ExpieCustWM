@@ -170,8 +170,8 @@ fn default_bindings() -> Vec<KeyBinding> {
         KeyBinding { mods: vec!["Mod4".into()], key: "m".into(), action: BindingAction::LayoutMonocle },
         KeyBinding { mods: vec!["Mod4".into()], key: "s".into(), action: BindingAction::LayoutFloating },
         KeyBinding { mods: vec!["Mod4".into(), "Shift".into()], key: "c".into(), action: BindingAction::ReloadConfig },
-        KeyBinding { mods: vec!["Mod4".into(), "Shift".into()], key: "p".into(), action: BindingAction::Spawn("maim -s ~/Pictures/screenshot-$(date +%s).png".into()) },
-        KeyBinding { mods: vec![], key: "Print".into(), action: BindingAction::Spawn("maim ~/Pictures/screenshot-$(date +%s).png".into()) },
+        KeyBinding { mods: vec!["Mod4".into(), "Shift".into()], key: "p".into(), action: BindingAction::Spawn("maim -s ~/Pictures/Screenshots/screenshot-$(date +%s).png".into()) },
+        KeyBinding { mods: vec![], key: "Print".into(), action: BindingAction::Spawn("maim ~/Pictures/Screenshots/screenshot-$(date +%s).png".into()) },
         KeyBinding { mods: vec!["Mod4".into(), "Shift".into()], key: "q".into(), action: BindingAction::Quit },
     ]
 }
