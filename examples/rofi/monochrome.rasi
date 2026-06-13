@@ -1,16 +1,16 @@
 * {
-    background:     #000000;
-    background-alt: #111111;
-    foreground:     #ffffff;
-    foreground-alt: #888888;
-    urgent:         #ffffff;
-    active:         #ffffff;
+    background:     #ffffff;
+    background-alt: #eeeeee;
+    foreground:     #000000;
+    foreground-alt: #555555;
+    urgent:         #000000;
+    active:         #000000;
 
-    border-color: #333333;
+    border-color: #cccccc;
     separatorcolor: @border-color;
     scrollbarcolor: @border-color;
 
-    font: "Fira Code 10";
+    font: "DejaVu Sans Mono 10";
 
     /* Text colors */
     text-color:        @foreground;
@@ -30,7 +30,6 @@
 }
 
 window {
-    transparency: "real";
     location: center;
     anchor: center;
     fullscreen: false;
@@ -39,6 +38,7 @@ window {
     border-color: @border-color;
     border-radius: 0;
     background-color: @background;
+    background-blur: false;
 }
 
 mainbox {
@@ -84,20 +84,32 @@ listview {
 element {
     padding: 6 12;
     text-color: @foreground;
-    background-color: transparent;
+    background-color: @background;
 }
 
-element selected {
+element selected.normal {
     text-color: @background;
     background-color: @foreground;
 }
 
 element urgent {
     text-color: @urgent;
+    background-color: #ffcccc;
 }
 
 element active {
     text-color: @active;
+    background-color: #ccffcc;
+}
+
+element selected.urgent {
+    text-color: @urgent;
+    background-color: @foreground;
+}
+
+element selected.active {
+    text-color: @active;
+    background-color: @foreground;
 }
 
 button {

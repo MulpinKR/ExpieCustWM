@@ -317,6 +317,7 @@ impl Wm {
                 EventMask::SUBSTRUCTURE_REDIRECT
                 | EventMask::SUBSTRUCTURE_NOTIFY
                 | EventMask::BUTTON_PRESS
+                | EventMask::ENTER_WINDOW
                 | EventMask::EXPOSURE
             )
             .background_pixel(0x00333333)

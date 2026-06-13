@@ -6,7 +6,7 @@
     terminal: "konsole",
 
     // Application launcher
-    launcher: "rofi -show run",
+    launcher: "rofi -show drun",
 
     // Gaps and borders (pixels)
     gap: 4,
