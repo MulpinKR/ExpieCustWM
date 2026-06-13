@@ -77,7 +77,7 @@ impl Wm {
 
         {
             let screen = &self.conn.setup().roots[self.screen_num];
-            let default_path = dirs_home().map(|p| p.join("Pictures/ExpieCustWM.png"));
+            let default_path = dirs_home().map(|p| p.join("Pictures/expiecustWM.png"));
 
             if let Some(ref color) = self.config.wallpaper_color {
                 let val = u32::from_str_radix(color.trim_start_matches('#'), 16).unwrap_or(0x1a1a2e);
