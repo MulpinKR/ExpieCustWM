@@ -77,18 +77,27 @@ impl Wm {
 
         {
             let screen = &self.conn.setup().roots[self.screen_num];
+            let default_path = dirs_home().map(|p| p.join("Pictures/ExpieCustWM.png"));
+
             if let Some(ref color) = self.config.wallpaper_color {
                 let val = u32::from_str_radix(color.trim_start_matches('#'), 16).unwrap_or(0x1a1a2e);
                 crate::wallpaper::set_solid(&self.conn, screen, 0xff000000 | val)?;
-            } else if let Some(ref path) = self.config.wallpaper {
-                let data = std::fs::read(path).unwrap_or_default();
-                if !data.is_empty() {
-                    crate::wallpaper::set_from_png_bytes(&self.conn, screen, &data)?;
-                } else {
-                    log::warn!("Wallpaper file not found: {}", path);
-                }
             } else {
-                crate::wallpaper::set_default(&self.conn, screen)?;
+                let wp_cfg = self.config.wallpaper.as_ref().map(std::path::PathBuf::from);
+                let path = wp_cfg.as_ref()
+                    .or(default_path.as_ref())
+                    .filter(|p| p.exists());
+                match path {
+                    Some(p) => {
+                        let data = std::fs::read(p).unwrap_or_default();
+                        if !data.is_empty() {
+                            crate::wallpaper::set_from_png_bytes(&self.conn, screen, &data)?;
+                        }
+                    }
+                    None => {
+                        crate::wallpaper::set_default(&self.conn, screen)?;
+                    }
+                }
             }
         }
 
@@ -627,6 +636,10 @@ impl Wm {
         }
         Ok(())
     }
+}
+
+fn dirs_home() -> Option<std::path::PathBuf> {
+    std::env::var("HOME").ok().map(std::path::PathBuf::from)
 }
 
 fn conn_create_window(
