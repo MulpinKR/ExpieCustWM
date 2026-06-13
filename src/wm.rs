@@ -75,36 +75,8 @@ impl Wm {
         std::thread::sleep(std::time::Duration::from_millis(300));
         self.bar_top = self.query_strut_top();
 
-        {
-            let screen = &self.conn.setup().roots[self.screen_num];
-            if let Some(ref color) = self.config.wallpaper_color {
-                let val = u32::from_str_radix(color.trim_start_matches('#'), 16).unwrap_or(0x1a1a2e);
-                crate::wallpaper::set_solid(&self.conn, screen, 0xff000000 | val)?;
-            } else {
-                let path = self.config.wallpaper.as_ref()
-                    .map(std::path::PathBuf::from)
-                    .or_else(|| {
-                        dirs_home().map(|p| p.join("Pictures/expiecustWM.png"))
-                    })
-                    .filter(|p| p.exists());
-                match path {
-                    Some(p) => {
-                        if let Ok(data) = std::fs::read(&p) {
-                            if !data.is_empty() {
-                                crate::wallpaper::set_from_png_bytes(&self.conn, screen, &data)?;
-                            }
-                        }
-                    }
-                    None => {
-                        log::error!(
-                            "Wallpaper file not found at ~/Pictures/expiecustWM.png. \
-                             Please report to the developer or reinstall the WM. \
-                             Falling back to debug wallpaper."
-                        );
-                        crate::wallpaper::set_debug(&self.conn, screen)?;
-                    }
-                }
-            }
+        if let Err(e) = self.set_wallpaper() {
+            log::error!("Wallpaper setup failed: {}", e);
         }
 
         loop {
@@ -141,6 +113,37 @@ impl Wm {
             self.bindings.grab(&self.conn);
             self.conn.flush()?;
         }
+    }
+
+    fn set_wallpaper(&self) -> anyhow::Result<()> {
+        let screen = &self.conn.setup().roots[self.screen_num];
+        if let Some(ref color) = self.config.wallpaper_color {
+            let val = u32::from_str_radix(color.trim_start_matches('#'), 16).unwrap_or(0x1a1a2e);
+            crate::wallpaper::set_solid(&self.conn, screen, 0xff000000 | val)?;
+        } else {
+            let path = self.config.wallpaper.as_ref()
+                .map(std::path::PathBuf::from)
+                .or_else(|| dirs_home().map(|p| p.join("Pictures/expiecustWM.png")))
+                .filter(|p| p.exists());
+            match path {
+                Some(p) => {
+                    if let Ok(data) = std::fs::read(&p) {
+                        if !data.is_empty() {
+                            crate::wallpaper::set_from_png_bytes(&self.conn, screen, &data)?;
+                        }
+                    }
+                }
+                None => {
+                    log::error!(
+                        "Wallpaper file not found at ~/Pictures/expiecustWM.png. \
+                         Please report to the developer or reinstall the WM. \
+                         Falling back to debug wallpaper."
+                    );
+                    crate::wallpaper::set_debug(&self.conn, screen)?;
+                }
+            }
+        }
+        Ok(())
     }
 
     fn run_autostart(&self) {

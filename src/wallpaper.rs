@@ -1,4 +1,4 @@
-use x11rb::connection::Connection;
+use x11rb::connection::{Connection, RequestConnection};
 use x11rb::protocol::xproto::*;
 use x11rb::rust_connection::RustConnection;
 
@@ -22,6 +22,9 @@ pub fn set_from_png_bytes(conn: &RustConnection, screen: &Screen, png_data: &[u8
     let img_h = img.height();
     let pixels = img.into_raw();
 
+    // Negotiate BIG-REQUESTS before sending large PutImage
+    let _max = conn.maximum_request_bytes();
+
     let pixmap = conn.generate_id()?;
     conn.create_pixmap(screen.root_depth, pixmap, screen.root, img_w as u16, img_h as u16)?;
 
@@ -30,7 +33,7 @@ pub fn set_from_png_bytes(conn: &RustConnection, screen: &Screen, png_data: &[u8
 
     let zdata = rgba_to_zpixmap(&pixels, conn.setup().image_byte_order);
 
-    conn.put_image(
+    if let Err(e) = conn.put_image(
         ImageFormat::Z_PIXMAP,
         pixmap,
         gc,
@@ -39,7 +42,12 @@ pub fn set_from_png_bytes(conn: &RustConnection, screen: &Screen, png_data: &[u8
         0, 0, 0,
         screen.root_depth,
         &zdata,
-    )?;
+    ) {
+        log::error!("Failed to set wallpaper via PutImage: {}. Falling back to solid color.", e);
+        conn.free_gc(gc)?;
+        set_solid(conn, screen, 0x001a1a2e)?;
+        return Ok(());
+    }
 
     conn.change_window_attributes(screen.root, &ChangeWindowAttributesAux::new()
         .background_pixmap(Pixmap::from(pixmap)))?;
