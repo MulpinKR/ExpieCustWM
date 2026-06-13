@@ -6,7 +6,9 @@ use x11rb::protocol::xproto::*;
 use x11rb::protocol::xproto::ConnectionExt;
 use x11rb::protocol::Event;
 use x11rb::rust_connection::RustConnection;
+use std::time::Duration;
 
+use crate::animation::SlideAnim;
 use crate::bindings::BindingManager;
 use crate::client::{Client, LayoutMode};
 use crate::config::{BindingAction, Config};
@@ -35,6 +37,10 @@ pub struct Wm {
     config: Config,
     bindings: BindingManager,
     bar_top: u32,
+    animations: Vec<SlideAnim>,
+    animating: bool,
+    pending_ws: Option<(usize, usize)>,
+    pending_close: Option<(usize, usize, Window, Window)>, // (ws_idx, client_idx)
 }
 
 impl Wm {
@@ -45,7 +51,8 @@ impl Wm {
 
         x11::acquire_wm(&conn, &screen)?;
         let atoms = Atoms::intern(&conn)?;
-        x11::setup_ewmh(&conn, &screen, &atoms)?;
+        let ws_count = 5u32;
+        x11::setup_ewmh(&conn, &screen, &atoms, ws_count)?;
 
         let screen_width = screen.width_in_pixels;
         let screen_height = screen.height_in_pixels;
@@ -58,7 +65,6 @@ impl Wm {
 
         let bindings = BindingManager::new(&config, &conn)?;
 
-        let ws_count = 5;
         let mut wm = Wm {
             conn,
             screen_num,
@@ -70,6 +76,10 @@ impl Wm {
             config,
             bindings,
             bar_top: 0,
+            animations: Vec::new(),
+            animating: false,
+            pending_ws: None,
+            pending_close: None,
         };
 
         wm.scan_existing_windows()?;
@@ -123,38 +133,34 @@ impl Wm {
         }
 
         loop {
-            let event = match self.conn.wait_for_event() {
-                Ok(ev) => ev,
-                Err(e) => {
-                    log::error!("X11 connection: {}", e);
+            if self.animating {
+                // Non-blocking event processing during animation
+                while let Ok(Some(event)) = self.conn.poll_for_event() {
+                    if let Err(e) = self.handle_event(event) {
+                        log::error!("Handler error: {}", e);
+                    }
                     self.bindings.grab(&self.conn);
-                    self.conn.flush()?;
-                    continue;
                 }
-            };
-            let result = match event {
-                Event::MapRequest(ev) => self.handle_map_request(ev),
-                Event::ConfigureRequest(ev) => self.handle_configure_request(ev),
-                Event::DestroyNotify(ev) => self.handle_destroy(ev),
-                Event::UnmapNotify(ev) => self.handle_unmap(ev),
-                Event::KeyPress(ev) => self.handle_keypress(ev),
-                Event::ButtonPress(ev) => self.handle_button_press(ev),
-                Event::EnterNotify(ev) => self.handle_enter(ev),
-                Event::ClientMessage(ev) => self.handle_client_message(ev),
-                Event::Expose(ev) => self.handle_expose(ev),
-                Event::PropertyNotify(ev) => self.handle_property_notify(ev),
-                Event::CreateNotify(_) => {
-                    self.bar_top = self.query_strut_top();
-                    Ok(())
+                self.tick_animations()?;
+                if self.animating {
+                    std::thread::sleep(Duration::from_millis(16));
                 }
-                _ => Ok(()),
-            };
-            if let Err(e) = result {
-                log::error!("Handler error: {}", e);
+            } else {
+                let event = match self.conn.wait_for_event() {
+                    Ok(ev) => ev,
+                    Err(e) => {
+                        log::error!("X11 connection: {}", e);
+                        self.bindings.grab(&self.conn);
+                        self.conn.flush()?;
+                        continue;
+                    }
+                };
+                if let Err(e) = self.handle_event(event) {
+                    log::error!("Handler error: {}", e);
+                }
+                self.bindings.grab(&self.conn);
+                self.conn.flush()?;
             }
-            // re-grab after each event
-            self.bindings.grab(&self.conn);
-            self.conn.flush()?;
         }
     }
 
@@ -187,6 +193,26 @@ impl Wm {
             }
         }
         Ok(())
+    }
+
+    fn handle_event(&mut self, event: Event) -> anyhow::Result<()> {
+        match event {
+            Event::MapRequest(ev) => self.handle_map_request(ev),
+            Event::ConfigureRequest(ev) => self.handle_configure_request(ev),
+            Event::DestroyNotify(ev) => self.handle_destroy(ev),
+            Event::UnmapNotify(ev) => self.handle_unmap(ev),
+            Event::KeyPress(ev) => self.handle_keypress(ev),
+            Event::ButtonPress(ev) => self.handle_button_press(ev),
+            Event::EnterNotify(ev) => self.handle_enter(ev),
+            Event::ClientMessage(ev) => self.handle_client_message(ev),
+            Event::Expose(ev) => self.handle_expose(ev),
+            Event::PropertyNotify(ev) => self.handle_property_notify(ev),
+            Event::CreateNotify(_) => {
+                self.bar_top = self.query_strut_top();
+                Ok(())
+            }
+            _ => Ok(()),
+        }
     }
 
     fn run_autostart(&self) {
@@ -269,6 +295,14 @@ impl Wm {
             self.atoms.net_client_list_stacking, AtomEnum::WINDOW,
             &stacked,
         )?;
+
+        let current = self.current_workspace as u32;
+        conn_change_property32(
+            &self.conn, PropMode::REPLACE, self.root,
+            self.atoms.net_current_desktop, AtomEnum::CARDINAL,
+            &[current],
+        )?;
+
         self.conn.flush()?;
         Ok(())
     }
@@ -324,8 +358,29 @@ impl Wm {
         }
 
         log::info!("Managed window {} -> frame {}", window, frame);
+
+        let sw = self.conn.setup().roots[self.screen_num].width_in_pixels as i32;
+        let sh = self.conn.setup().roots[self.screen_num].height_in_pixels as i32;
+        let area = Area { x: 0, y: self.bar_top as i32, width: sw, height: sh - self.bar_top as i32 };
+
         self.update_ewmh()?;
-        self.arrange()?;
+
+        let placements = self.layout.arrange(&self.workspaces[wi].clients, &area, self.workspaces[wi].focus_index);
+        if let Some(p) = placements.iter().find(|p| p.client_index == idx) {
+            let start_y = -1000i32;
+            let _ = self.conn.configure_window(frame, &ConfigureWindowAux::new()
+                .x(p.x).y(start_y).width(p.width as u32).height(p.height as u32));
+            self.animations.push(SlideAnim::new(
+                frame,
+                p.x, start_y, p.x, p.y,
+                p.width as u16, p.height as u16,
+                10,
+            ));
+            self.animating = true;
+            self.conn.flush()?;
+        } else {
+            self.arrange()?;
+        }
         Ok(())
     }
 
@@ -378,6 +433,7 @@ impl Wm {
     }
 
     fn arrange(&mut self) -> anyhow::Result<()> {
+        if self.animating { return Ok(()); }
         let sw = self.conn.setup().roots[self.screen_num].width_in_pixels as i32;
         let sh = self.conn.setup().roots[self.screen_num].height_in_pixels as i32;
         let bar_top = self.bar_top as i32;
@@ -469,32 +525,54 @@ impl Wm {
     }
 
     fn close_focused(&mut self) -> anyhow::Result<()> {
-        let mut idx_to_remove = None;
         let ws_idx = self.current_workspace;
-        if let Some(idx) = self.ws().focus_index {
-            if let Some(client) = self.ws().clients.get(idx) {
-                match self.conn.get_window_attributes(client.window)?.reply() {
-                    Ok(_) => {
-                        client.close(&self.conn, self.atoms.wm_protocols, self.atoms.wm_delete_window)?;
-                    }
-                    Err(_) => {
-                        idx_to_remove = Some(idx);
-                    }
-                }
+        let idx = match self.ws().focus_index {
+            Some(i) => i,
+            None => return Ok(()),
+        };
+
+        let frame = self.workspaces[ws_idx].clients[idx].frame;
+        let client_win = self.workspaces[ws_idx].clients[idx].window;
+
+        if let Ok(cookie) = self.conn.get_geometry(frame) {
+            if let Ok(geom) = cookie.reply() {
+                let end_y = -1000i32;
+                self.animations.push(SlideAnim::new(
+                    frame,
+                    geom.x as i32, geom.y as i32,
+                    geom.x as i32, end_y,
+                    geom.width, geom.height,
+                    10,
+                ));
+                self.animating = true;
+                self.pending_close = Some((ws_idx, idx, frame, client_win));
+                self.conn.flush()?;
+                return Ok(());
             }
         }
-        if let Some(idx) = idx_to_remove {
-            let ws = &mut self.workspaces[ws_idx];
-            let _ = self.conn.destroy_window(ws.clients[idx].frame);
-            ws.clients.remove(idx);
-            if ws.clients.is_empty() {
-                ws.focus_index = None;
+
+        // Fallback: immediate close
+        self.do_close(ws_idx, idx, frame, client_win)
+    }
+
+    fn do_close(&mut self, ws_idx: usize, idx: usize, frame: Window, client_win: Window) -> anyhow::Result<()> {
+        let attrs = self.conn.get_window_attributes(client_win)?.reply();
+        if attrs.is_ok() {
+            let c = &self.workspaces[ws_idx].clients[idx];
+            c.close(&self.conn, self.atoms.wm_protocols, self.atoms.wm_delete_window)?;
+        } else {
+            let _ = self.conn.destroy_window(frame);
+            self.workspaces[ws_idx].clients.remove(idx);
+            if self.workspaces[ws_idx].clients.is_empty() {
+                self.workspaces[ws_idx].focus_index = None;
+                self.conn.set_input_focus(InputFocus::POINTER_ROOT, self.root, 0u32)?;
             } else {
-                ws.focus_index = Some(0);
+                self.workspaces[ws_idx].focus_index = Some(0);
             }
             self.update_ewmh()?;
             self.arrange()?;
         }
+        self.conn.flush()?;
         Ok(())
     }
 
@@ -722,29 +800,106 @@ impl Wm {
     }
 
     fn switch_workspace(&mut self, n: usize) {
-        if n == self.current_workspace || n >= self.workspaces.len() {
+        if n == self.current_workspace || n >= self.workspaces.len() || self.animating {
             return;
         }
         let old = self.current_workspace;
-        self.current_workspace = n;
-        log::info!("Switch workspace {} -> {}", old, n);
+        let sw = self.conn.setup().roots[self.screen_num].width_in_pixels as i32;
+        let dir = if n > old { -1 } else { 1 };
+        let offset = sw * dir;
+        let frames = 12u32;
 
+        let mut anims = Vec::new();
+        // Slide old windows out
         for c in &self.workspaces[old].clients {
-            let _ = self.conn.unmap_window(c.frame);
+            if let Ok(cookie) = self.conn.get_geometry(c.frame) {
+                if let Ok(geom) = cookie.reply() {
+                    anims.push(SlideAnim::new(
+                        c.frame,
+                        geom.x as i32, geom.y as i32,
+                        geom.x as i32 + offset, geom.y as i32,
+                        geom.width, geom.height,
+                        frames,
+                    ));
+                }
+            }
         }
-        for c in &self.workspaces[n].clients {
-            let _ = self.conn.map_window(c.frame);
+        // Pre-position new windows off-screen, map them, create slide-in anims
+        let area = Area {
+            x: 0, y: self.bar_top as i32,
+            width: sw, height: self.conn.setup().roots[self.screen_num].height_in_pixels as i32 - self.bar_top as i32,
+        };
+        let bw = self.config.border_width;
+        let placements = self.layout.arrange(&self.workspaces[n].clients, &area, self.workspaces[n].focus_index);
+        for p in &placements {
+            if let Some(c) = self.workspaces[n].clients.get(p.client_index) {
+                let _ = self.conn.map_window(c.frame);
+                anims.push(SlideAnim::new(
+                    c.frame,
+                    p.x + offset, p.y,
+                    p.x, p.y,
+                    p.width as u16, p.height as u16,
+                    frames,
+                ));
+                let _ = c.resize(&self.conn, p.x + offset, p.y, p.width, p.height, bw);
+            }
+        }
+        self.animations = anims;
+        self.animating = true;
+        self.pending_ws = Some((old, n));
+        log::info!("Switch workspace {} -> {} (slide)", old, n);
+    }
+
+    fn tick_animations(&mut self) -> anyhow::Result<()> {
+        if !self.animating { return Ok(()); }
+
+        let mut done = true;
+        for anim in &mut self.animations {
+            if anim.advance() {
+                done = false;
+                let x = anim.current_x() as i32;
+                let y = anim.current_y() as i32;
+                let _ = self.conn.configure_window(anim.window, &ConfigureWindowAux::new()
+                    .x(x).y(y));
+            }
+        }
+        self.conn.flush()?;
+
+        if done {
+            self.finish_animation()?;
+        }
+        Ok(())
+    }
+
+    fn finish_animation(&mut self) -> anyhow::Result<()> {
+        self.animating = false;
+        self.animations.clear();
+
+        // Handle pending close (executed after slide-up animation)
+        if let Some((ws_idx, idx, frame, client_win)) = self.pending_close.take() {
+            if ws_idx < self.workspaces.len() && idx < self.workspaces[ws_idx].clients.len() {
+                let _ = self.do_close(ws_idx, idx, frame, client_win);
+            }
         }
 
-        if let Some(idx) = self.workspaces[n].focus_index {
-            let _ = self.workspaces[n].clients[idx].focus(&self.conn);
-        } else {
-            let _ = self.conn.set_input_focus(InputFocus::POINTER_ROOT, self.root, 0u32);
+        // Handle workspace switch finalization
+        if let Some((old, n)) = self.pending_ws.take() {
+            for c in &self.workspaces[old].clients {
+                let _ = self.conn.unmap_window(c.frame);
+            }
+            self.current_workspace = n;
+
+            if let Some(idx) = self.workspaces[n].focus_index {
+                let _ = self.workspaces[n].clients[idx].focus(&self.conn);
+            } else {
+                let _ = self.conn.set_input_focus(InputFocus::POINTER_ROOT, self.root, 0u32);
+            }
+            let _ = self.update_ewmh();
         }
 
-        let _ = self.update_ewmh();
         let _ = self.arrange();
         let _ = self.conn.flush();
+        Ok(())
     }
 
     fn move_focused_to_workspace(&mut self, n: usize) -> anyhow::Result<()> {

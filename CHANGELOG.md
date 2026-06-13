@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.0.1 "Cave" (2026-06-13)
+
+### Added
+- Workspace slide animation (left/right, 12 frames)
+- Window open animation (slide-down from -1000px)
+- Window close animation (slide-up)
+- Rofi black & white theme (monochrome.rasi)
+- EWMH: _NET_CURRENT_DESKTOP now updates live, _NET_DESKTOP_NAMES set
+- Fastfetch integration: WM name shown as "expiecustwm 0.0.1"
+
+### Fixed
+- Workspace highlighting lag (switched to xprop -spy event-based polling)
+- Polybar bluetooth text (removed icon fonts, use "BT"/"off")
+- Separator between BT and wifi modules in polybar
+
+### Added
+- Polybar workspace module (custom/script, works with any EWMH WM)
+- Polybar separator module |
+- Rofi theme (examples/rofi/monochrome.rasi)
+
 ## 0.0.0 "Cave" (2026-06-13)
 
 First prototype release.
@@ -25,7 +45,7 @@ First prototype release.
 - Print key binding (no longer requires Mod4)
 - Screenshot save path (now ~/Pictures/Screenshots/)
 - Scripts use full paths (no PATH dependency)
-- No external notify-send dependency
+- External notify-send dependency removed
 
 ### Config
 - Default polybar config included in repository

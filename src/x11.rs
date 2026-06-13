@@ -20,6 +20,7 @@ pub struct Atoms {
     pub net_client_list_stacking: Atom,
     pub net_number_of_desktops: Atom,
     pub net_current_desktop: Atom,
+    pub net_desktop_names: Atom,
     pub net_wm_window_opacity: Atom,
     pub motif_wm_hints: Atom,
     pub net_wm_strut_partial: Atom,
@@ -46,6 +47,7 @@ impl Atoms {
             "_NET_CLIENT_LIST_STACKING",
             "_NET_NUMBER_OF_DESKTOPS",
             "_NET_CURRENT_DESKTOP",
+            "_NET_DESKTOP_NAMES",
             "_NET_WM_WINDOW_OPACITY",
             "_MOTIF_WM_HINTS",
             "_NET_WM_STRUT_PARTIAL",
@@ -78,22 +80,23 @@ impl Atoms {
             net_client_list_stacking: atoms[14],
             net_number_of_desktops: atoms[15],
             net_current_desktop: atoms[16],
-            net_wm_window_opacity: atoms[17],
-            motif_wm_hints: atoms[18],
-            net_wm_strut_partial: atoms[19],
+            net_desktop_names: atoms[17],
+            net_wm_window_opacity: atoms[18],
+            motif_wm_hints: atoms[19],
+            net_wm_strut_partial: atoms[20],
             ewmh_atoms,
         })
     }
 }
 
-pub fn setup_ewmh(conn: &RustConnection, screen: &Screen, atoms: &Atoms) -> anyhow::Result<()> {
+pub fn setup_ewmh(conn: &RustConnection, screen: &Screen, atoms: &Atoms, ws_count: u32) -> anyhow::Result<()> {
     let root = screen.root;
 
     let wm_check_window = conn.generate_id()?;
     {
         use x11rb::protocol::xproto::ConnectionExt;
         conn.create_window(
-            screen.root_depth,
+            0, // depth must be 0 for InputOnly windows
             wm_check_window,
             root,
             -1, -1, 1, 1, 0,
@@ -105,8 +108,13 @@ pub fn setup_ewmh(conn: &RustConnection, screen: &Screen, atoms: &Atoms) -> anyh
 
     set_prop32(conn, wm_check_window, atoms.net_supporting_wm_check, AtomEnum::WINDOW, &[root])?;
 
-    let wm_name = b"RUSTWM";
-    set_prop8(conn, wm_check_window, atoms.net_wm_name, AtomEnum::STRING, wm_name)?;
+    // Set _NET_WM_NAME with STRING type (only on check window, not root — root triggers DE detection)
+    let wm_name_fmt = format!("expiecustwm {} {}", crate::version::VERSION, crate::version::CODENAME);
+    set_prop8(conn, wm_check_window, atoms.net_wm_name, AtomEnum::STRING, wm_name_fmt.as_bytes())?;
+
+    // Set _NET_WM_PID
+    let pid = std::process::id();
+    set_prop32(conn, wm_check_window, atoms.net_wm_pid, AtomEnum::CARDINAL, &[pid])?;
 
     set_prop32(conn, root, atoms.net_supporting_wm_check, AtomEnum::WINDOW, &[wm_check_window])?;
 
@@ -115,8 +123,17 @@ pub fn setup_ewmh(conn: &RustConnection, screen: &Screen, atoms: &Atoms) -> anyh
 
     set_prop32(conn, root, atoms.net_client_list, AtomEnum::WINDOW, &[])?;
     set_prop32(conn, root, atoms.net_client_list_stacking, AtomEnum::WINDOW, &[])?;
-    set_prop32(conn, root, atoms.net_number_of_desktops, AtomEnum::CARDINAL, &[1])?;
+    set_prop32(conn, root, atoms.net_number_of_desktops, AtomEnum::CARDINAL, &[ws_count])?;
     set_prop32(conn, root, atoms.net_current_desktop, AtomEnum::CARDINAL, &[0])?;
+
+    let desktop_names: Vec<u8> = (1..=ws_count)
+        .flat_map(|i| {
+            let mut s = i.to_string().into_bytes();
+            s.push(0);
+            s
+        })
+        .collect();
+    set_prop8(conn, root, atoms.net_desktop_names, AtomEnum::STRING, &desktop_names)?;
 
     conn.map_window(wm_check_window)?;
     conn.flush()?;
@@ -219,12 +236,14 @@ pub fn mod_string_to_mask(s: &str) -> u16 {
 fn set_prop32(conn: &RustConnection, win: Window, prop: Atom, type_: AtomEnum, data: &[u32]) -> anyhow::Result<()> {
     let bytes: Vec<u8> = data.iter().flat_map(|&v| v.to_ne_bytes()).collect();
     let len = data.len() as u32;
-    conn.change_property(PropMode::REPLACE, win, prop, type_, 32, len, &bytes)?;
+    conn.change_property(PropMode::REPLACE, win, prop, u32::from(type_), 32, len, &bytes)?;
     Ok(())
 }
 
 fn set_prop8(conn: &RustConnection, win: Window, prop: Atom, type_: AtomEnum, data: &[u8]) -> anyhow::Result<()> {
     let len = data.len() as u32;
-    conn.change_property(PropMode::REPLACE, win, prop, type_, 8, len, data)?;
+    conn.change_property(PropMode::REPLACE, win, prop, u32::from(type_), 8, len, data)?;
     Ok(())
 }
+
+

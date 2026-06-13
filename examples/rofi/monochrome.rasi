@@ -1,0 +1,112 @@
+* {
+    background:     #000000;
+    background-alt: #111111;
+    foreground:     #ffffff;
+    foreground-alt: #888888;
+    urgent:         #ffffff;
+    active:         #ffffff;
+
+    border-color: #333333;
+    separatorcolor: @border-color;
+    scrollbarcolor: @border-color;
+
+    font: "Fira Code 10";
+
+    /* Text colors */
+    text-color:        @foreground;
+    text-color-alt:    @foreground-alt;
+    text-color-urgent: @urgent;
+    text-color-active: @active;
+
+    /* Background colors */
+    bg-color:       @background;
+    bg-alt-color:   @background-alt;
+    bg-urgent:      @urgent;
+    bg-active:      @active;
+
+    /* Spacing */
+    padding: 4;
+    spacing: 2;
+}
+
+window {
+    transparency: "real";
+    location: center;
+    anchor: center;
+    fullscreen: false;
+    width: 600;
+    border: 2;
+    border-color: @border-color;
+    border-radius: 0;
+    background-color: @background;
+}
+
+mainbox {
+    padding: 0;
+    spacing: 0;
+    children: [ inputbar, listview ];
+}
+
+inputbar {
+    padding: 8 12;
+    spacing: 8;
+    background-color: @background;
+    text-color: @foreground;
+    border-color: @border-color;
+    border: 0 0 1 0;
+    children: [ prompt, textbox-prompt-sep, entry, case-indicator ];
+}
+
+prompt {
+    text-color: @foreground-alt;
+}
+
+textbox-prompt-sep {
+    str: ":";
+    text-color: @foreground-alt;
+}
+
+entry {
+    text-color: @foreground;
+}
+
+listview {
+    padding: 4 0;
+    spacing: 0;
+    layout: vertical;
+    cycle: true;
+    dynamic: true;
+    scrollbar: true;
+    scrollbar-width: 4;
+    scrollbar-color: @scrollbarcolor;
+}
+
+element {
+    padding: 6 12;
+    text-color: @foreground;
+    background-color: transparent;
+}
+
+element selected {
+    text-color: @background;
+    background-color: @foreground;
+}
+
+element urgent {
+    text-color: @urgent;
+}
+
+element active {
+    text-color: @active;
+}
+
+button {
+    text-color: @foreground;
+    background-color: @background-alt;
+}
+
+error-message {
+    background-color: @background;
+    text-color: @foreground;
+    border-color: @border-color;
+}

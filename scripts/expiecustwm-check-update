@@ -1,0 +1,33 @@
+#!/bin/bash
+# Read version from running binary
+read -r _ local_version local_codename <<< "$(/home/mulpin/.local/bin/expiecustwm --version 2>/dev/null)"
+local_version="${local_version%\"}"
+local_version="${local_version#\"}"
+local_codename="${local_codename%\"}"
+local_codename="${local_codename#\"}"
+: "${local_version:=0.0.0}"
+: "${local_codename:=Cave}"
+repo="MulpinKR/ExpieCustWM"
+timeout=5
+
+latest=$(curl -sf --connect-timeout "$timeout" \
+    "https://api.github.com/repos/$repo/releases/latest" 2>/dev/null | \
+    python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('tag_name',''))" 2>/dev/null)
+
+if [ -z "$latest" ]; then
+    latest=$(curl -sf --connect-timeout "$timeout" \
+        "https://api.github.com/repos/$repo/commits/master" 2>/dev/null | \
+        python3 -c "import sys,json; d=json.load(sys.stdin); print(d['sha'][:7])" 2>/dev/null)
+fi
+
+if [ -z "$latest" ]; then
+    exit 0
+fi
+
+if [ "$latest" != "$local_version" ] && [ "$latest" != "v$local_version" ]; then
+    msg="Yo your wm get new update ($local_version $local_codename --> $latest, check wm github repo to update)"
+    echo "$msg" >> /tmp/expiecustwm-update.log
+    if command -v notify-send &>/dev/null; then
+        notify-send -u normal "expiecustWM update available" "$msg"
+    fi
+fi
