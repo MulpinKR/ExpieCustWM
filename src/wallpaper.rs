@@ -4,13 +4,15 @@ use x11rb::rust_connection::RustConnection;
 
 use image::imageops;
 
+use crate::x11::{set_prop32, Atoms};
+
 const DEBUG_WALLPAPER: &[u8] = include_bytes!("../assets/debug_wallpaper.png");
 
-pub fn set_debug(conn: &RustConnection, screen: &Screen) -> anyhow::Result<()> {
-    set_from_png_bytes(conn, screen, DEBUG_WALLPAPER)
+pub fn set_debug(conn: &RustConnection, screen: &Screen, atoms: &Atoms) -> anyhow::Result<()> {
+    set_from_png_bytes(conn, screen, atoms, DEBUG_WALLPAPER)
 }
 
-pub fn set_from_png_bytes(conn: &RustConnection, screen: &Screen, png_data: &[u8]) -> anyhow::Result<()> {
+pub fn set_from_png_bytes(conn: &RustConnection, screen: &Screen, atoms: &Atoms, png_data: &[u8]) -> anyhow::Result<()> {
     let dyn_img = match image::load_from_memory(png_data) {
         Ok(img) => img,
         Err(e) => {
@@ -55,19 +57,49 @@ pub fn set_from_png_bytes(conn: &RustConnection, screen: &Screen, png_data: &[u8
     conn.free_gc(pgc)?;
     log::info!("Uploaded {} strips to pixmap {}", n, pixmap);
 
-    conn.change_window_attributes(screen.root, &ChangeWindowAttributesAux::new()
-        .background_pixmap(Pixmap::from(pixmap)))?;
-    conn.clear_area(true, screen.root, 0, 0, 0, 0)?;
+    let win = conn.generate_id()?;
+    conn.create_window(
+        screen.root_depth, win, screen.root,
+        0, 0, screen_w as u16, screen_h as u16, 0,
+        WindowClass::COPY_FROM_PARENT,
+        screen.root_visual,
+        &CreateWindowAux::new()
+            .background_pixmap(Pixmap::from(pixmap))
+            .override_redirect(1u32)
+            .event_mask(EventMask::EXPOSURE),
+    )?;
+
+    set_prop32(conn, win, atoms.net_wm_window_type, AtomEnum::ATOM, &[atoms.net_wm_window_type_desktop])?;
+
+    conn.map_window(win)?;
+    conn.configure_window(win, &ConfigureWindowAux::new().stack_mode(StackMode::BELOW))?;
     conn.flush()?;
-    log::info!("background_pixmap set (scaled to screen)");
+    log::info!("Desktop wallpaper window created ({}x{})", screen_w, screen_h);
     Ok(())
 }
 
-pub fn set_solid(conn: &RustConnection, screen: &Screen, color: u32) -> anyhow::Result<()> {
-    conn.change_window_attributes(screen.root, &ChangeWindowAttributesAux::new()
-        .background_pixel(color))?;
-    conn.clear_area(true, screen.root, 0, 0, 0, 0)?;
+pub fn set_solid(conn: &RustConnection, screen: &Screen, atoms: &Atoms, color: u32) -> anyhow::Result<()> {
+    let screen_w = screen.width_in_pixels as u32;
+    let screen_h = screen.height_in_pixels as u32;
+
+    let win = conn.generate_id()?;
+    conn.create_window(
+        screen.root_depth, win, screen.root,
+        0, 0, screen_w as u16, screen_h as u16, 0,
+        WindowClass::COPY_FROM_PARENT,
+        screen.root_visual,
+        &CreateWindowAux::new()
+            .background_pixel(color)
+            .override_redirect(1u32)
+            .event_mask(EventMask::EXPOSURE),
+    )?;
+
+    set_prop32(conn, win, atoms.net_wm_window_type, AtomEnum::ATOM, &[atoms.net_wm_window_type_desktop])?;
+
+    conn.map_window(win)?;
+    conn.configure_window(win, &ConfigureWindowAux::new().stack_mode(StackMode::BELOW))?;
     conn.flush()?;
+    log::info!("Solid desktop wallpaper window created ({}x{}, color=0x{:08x})", screen_w, screen_h, color);
     Ok(())
 }
 

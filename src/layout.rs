@@ -39,7 +39,7 @@ impl LayoutEngine {
 
     pub fn arrange(&self, clients: &[Client], area: &Area, _sel_index: Option<usize>) -> Vec<Placement> {
         let visible: Vec<usize> = clients.iter().enumerate()
-            .filter(|(_, c)| !c.fullscreen)
+            .filter(|(_, c)| !c.fullscreen && !c.withdrawn)
             .map(|(i, _)| i)
             .collect();
 

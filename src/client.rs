@@ -21,6 +21,7 @@ pub struct Client {
     pub fullscreen: bool,
     pub urgent: bool,
     pub is_dialog: bool,
+    pub withdrawn: bool,
 }
 
 impl Client {
@@ -34,6 +35,7 @@ impl Client {
             fullscreen: false,
             urgent: false,
             is_dialog: false,
+            withdrawn: false,
         }
     }
 

@@ -5,12 +5,14 @@ use x11rb::rust_connection::RustConnection;
 pub struct Atoms {
     pub wm_protocols: Atom,
     pub wm_delete_window: Atom,
+    pub wm_change_state: Atom,
     pub wm_state: Atom,
     pub net_wm_name: Atom,
     pub net_wm_pid: Atom,
     pub net_wm_window_type: Atom,
     pub net_wm_window_type_dialog: Atom,
     pub net_wm_window_type_dock: Atom,
+    pub net_wm_window_type_desktop: Atom,
     pub net_wm_state: Atom,
     pub net_wm_state_fullscreen: Atom,
     pub net_active_window: Atom,
@@ -32,12 +34,14 @@ impl Atoms {
         let names = [
             "WM_PROTOCOLS",
             "WM_DELETE_WINDOW",
+            "WM_CHANGE_STATE",
             "WM_STATE",
             "_NET_WM_NAME",
             "_NET_WM_PID",
             "_NET_WM_WINDOW_TYPE",
             "_NET_WM_WINDOW_TYPE_DIALOG",
             "_NET_WM_WINDOW_TYPE_DOCK",
+            "_NET_WM_WINDOW_TYPE_DESKTOP",
             "_NET_WM_STATE",
             "_NET_WM_STATE_FULLSCREEN",
             "_NET_ACTIVE_WINDOW",
@@ -59,31 +63,33 @@ impl Atoms {
             atoms.push(cookie.reply()?.atom);
         }
 
-        let ewmh_start = 11; // _NET_SUPPORTED
+        let ewmh_start = 13; // _NET_SUPPORTED
         let ewmh_atoms = atoms[ewmh_start..].to_vec();
 
         Ok(Self {
             wm_protocols: atoms[0],
             wm_delete_window: atoms[1],
-            wm_state: atoms[2],
-            net_wm_name: atoms[3],
-            net_wm_pid: atoms[4],
-            net_wm_window_type: atoms[5],
-            net_wm_window_type_dialog: atoms[6],
-            net_wm_window_type_dock: atoms[7],
-            net_wm_state: atoms[8],
-            net_wm_state_fullscreen: atoms[9],
-            net_active_window: atoms[10],
-            net_supported: atoms[11],
-            net_supporting_wm_check: atoms[12],
-            net_client_list: atoms[13],
-            net_client_list_stacking: atoms[14],
-            net_number_of_desktops: atoms[15],
-            net_current_desktop: atoms[16],
-            net_desktop_names: atoms[17],
-            net_wm_window_opacity: atoms[18],
-            motif_wm_hints: atoms[19],
-            net_wm_strut_partial: atoms[20],
+            wm_change_state: atoms[2],
+            wm_state: atoms[3],
+            net_wm_name: atoms[4],
+            net_wm_pid: atoms[5],
+            net_wm_window_type: atoms[6],
+            net_wm_window_type_dialog: atoms[7],
+            net_wm_window_type_dock: atoms[8],
+            net_wm_window_type_desktop: atoms[9],
+            net_wm_state: atoms[10],
+            net_wm_state_fullscreen: atoms[11],
+            net_active_window: atoms[12],
+            net_supported: atoms[13],
+            net_supporting_wm_check: atoms[14],
+            net_client_list: atoms[15],
+            net_client_list_stacking: atoms[16],
+            net_number_of_desktops: atoms[17],
+            net_current_desktop: atoms[18],
+            net_desktop_names: atoms[19],
+            net_wm_window_opacity: atoms[20],
+            motif_wm_hints: atoms[21],
+            net_wm_strut_partial: atoms[22],
             ewmh_atoms,
         })
     }
@@ -233,7 +239,7 @@ pub fn mod_string_to_mask(s: &str) -> u16 {
     }
 }
 
-fn set_prop32(conn: &RustConnection, win: Window, prop: Atom, type_: AtomEnum, data: &[u32]) -> anyhow::Result<()> {
+pub fn set_prop32(conn: &RustConnection, win: Window, prop: Atom, type_: AtomEnum, data: &[u32]) -> anyhow::Result<()> {
     let bytes: Vec<u8> = data.iter().flat_map(|&v| v.to_ne_bytes()).collect();
     let len = data.len() as u32;
     conn.change_property(PropMode::REPLACE, win, prop, u32::from(type_), 32, len, &bytes)?;

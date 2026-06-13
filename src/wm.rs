@@ -123,14 +123,15 @@ impl Wm {
     }
 
     pub fn run(&mut self) -> anyhow::Result<()> {
+        if let Err(e) = self.set_wallpaper() {
+            log::error!("Wallpaper setup failed: {}", e);
+        }
+        self.conn.flush()?;
+
         self.run_autostart();
         self.conn.flush()?;
         std::thread::sleep(std::time::Duration::from_millis(300));
         self.bar_top = self.query_strut_top();
-
-        if let Err(e) = self.set_wallpaper() {
-            log::error!("Wallpaper setup failed: {}", e);
-        }
 
         loop {
             if self.animating {
@@ -168,7 +169,7 @@ impl Wm {
         let screen = &self.conn.setup().roots[self.screen_num];
         if let Some(ref color) = self.config.wallpaper_color {
             let val = u32::from_str_radix(color.trim_start_matches('#'), 16).unwrap_or(0x1a1a2e);
-            crate::wallpaper::set_solid(&self.conn, screen, 0xff000000 | val)?;
+            crate::wallpaper::set_solid(&self.conn, screen, &self.atoms, 0xff000000 | val)?;
         } else {
             let path = self.config.wallpaper.as_ref()
                 .map(std::path::PathBuf::from)
@@ -178,7 +179,7 @@ impl Wm {
                 Some(p) => {
                     if let Ok(data) = std::fs::read(&p) {
                         if !data.is_empty() {
-                            crate::wallpaper::set_from_png_bytes(&self.conn, screen, &data)?;
+                            crate::wallpaper::set_from_png_bytes(&self.conn, screen, &self.atoms, &data)?;
                         }
                     }
                 }
@@ -188,7 +189,7 @@ impl Wm {
                          Please report to the developer or reinstall the WM. \
                          Falling back to debug wallpaper."
                     );
-                    crate::wallpaper::set_debug(&self.conn, screen)?;
+                    crate::wallpaper::set_debug(&self.conn, screen, &self.atoms)?;
                 }
             }
         }
@@ -308,7 +309,9 @@ impl Wm {
     }
 
     fn manage_window(&mut self, window: Window) -> anyhow::Result<()> {
+        log::info!("manage_window: window={:#x} called", window);
         let geom = self.conn.get_geometry(window)?.reply()?;
+        log::info!("manage_window: geom {}x{}+{}+{}", geom.width, geom.height, geom.x, geom.y);
         let scr = &self.conn.setup().roots[self.screen_num];
 
         let frame = self.conn.generate_id()?;
@@ -583,6 +586,30 @@ impl Wm {
     }
 
     fn handle_map_request(&mut self, ev: MapRequestEvent) -> anyhow::Result<()> {
+        log::info!("handle_map_request: window={:#x} parent={:#x}", ev.window, ev.parent);
+        let withdrawn_frame = {
+            let ws = self.ws_mut();
+            ws.clients.iter_mut().position(|c| c.window == ev.window).and_then(|ci| {
+                if ws.clients[ci].withdrawn {
+                    ws.clients[ci].withdrawn = false;
+                    Some(ws.clients[ci].frame)
+                } else {
+                    None
+                }
+            })
+        };
+        if let Some(frame) = withdrawn_frame {
+            self.conn.map_window(frame)?;
+            self.conn.map_window(ev.window)?;
+            log::info!("Re-mapped withdrawn window {:#x} frame {:#x}", ev.window, frame);
+            let ci = self.ws().clients.iter().position(|c| c.window == ev.window).unwrap();
+            if let Err(e) = self.ws().clients[ci].focus(&self.conn) {
+                log::warn!("Failed to focus re-mapped window: {}", e);
+            }
+            self.update_ewmh()?;
+            self.arrange()?;
+            return Ok(());
+        }
         if self.ws().clients.iter().any(|c| c.window == ev.window) {
             return Ok(());
         }
@@ -665,7 +692,26 @@ impl Wm {
 
     fn handle_unmap(&mut self, ev: UnmapNotifyEvent) -> anyhow::Result<()> {
         if let Some((wi, ci)) = self.find_client(ev.window) {
-            self.unmanage_window(wi, ci)?;
+            let ws = &mut self.workspaces[wi];
+            if ci < ws.clients.len() {
+                ws.clients[ci].withdrawn = true;
+                self.conn.unmap_window(ws.clients[ci].frame)?;
+                log::info!("Window {} withdrawn (frame unmapped)", ev.window);
+                if ws.focus_index == Some(ci) {
+                    let new_focus = ws.clients.iter().position(|c| !c.withdrawn)
+                        .or_else(|| if ci > 0 { Some(ci - 1) } else { None });
+                    ws.focus_index = new_focus;
+                    if let Some(fi) = new_focus {
+                        if let Err(e) = ws.clients[fi].focus(&self.conn) {
+                            log::warn!("Failed to focus after withdraw: {}", e);
+                        }
+                    } else {
+                        self.conn.set_input_focus(InputFocus::POINTER_ROOT, self.root, 0u32)?;
+                    }
+                }
+                self.update_ewmh()?;
+                self.arrange()?;
+            }
         }
         Ok(())
     }
@@ -715,7 +761,77 @@ impl Wm {
         Ok(())
     }
 
-    fn handle_client_message(&mut self, _ev: ClientMessageEvent) -> anyhow::Result<()> {
+    fn handle_client_message(&mut self, ev: ClientMessageEvent) -> anyhow::Result<()> {
+        log::info!("client_message: window={:#x} type={} format={}", ev.window, ev.type_, ev.format);
+
+        if ev.type_ == self.atoms.net_active_window {
+            let data = ev.data.as_data32();
+            log::info!("_NET_ACTIVE_WINDOW: window={:#x} source={}", ev.window, data[0]);
+            if let Some((wi, ci)) = self.find_client(ev.window) {
+                if wi != self.current_workspace {
+                    self.switch_workspace(wi);
+                }
+                self.set_focus(ci)?;
+                self.update_ewmh()?;
+            }
+            return Ok(());
+        }
+
+        let data = ev.data.as_data32();
+        if ev.type_ == self.atoms.wm_change_state {
+            let state = data[0];
+            log::info!("WM_CHANGE_STATE: window={:#x} state={}", ev.window, state);
+            if state == 3 /* IconicState */ {
+                if let Some((wi, ci)) = self.find_client(ev.window) {
+                    let ws = &mut self.workspaces[wi];
+                    if ci < ws.clients.len() {
+                        ws.clients[ci].withdrawn = true;
+                        self.conn.unmap_window(ws.clients[ci].frame)?;
+                        log::info!("Iconified window {:#x}", ev.window);
+                        if ws.focus_index == Some(ci) {
+                            let new_focus = ws.clients.iter().position(|c| !c.withdrawn);
+                            ws.focus_index = new_focus;
+                            if let Some(fi) = new_focus {
+                                if let Err(e) = ws.clients[fi].focus(&self.conn) {
+                                    log::warn!("Failed to focus after iconify: {}", e);
+                                }
+                            } else {
+                                self.conn.set_input_focus(InputFocus::POINTER_ROOT, self.root, 0u32)?;
+                            }
+                        }
+                        self.update_ewmh()?;
+                        self.arrange()?;
+                    }
+                }
+            } else if state == 1 /* NormalState */ {
+                let withdrawn_frame = {
+                    let ws = self.ws_mut();
+                    ws.clients.iter_mut().position(|c| c.window == ev.window).and_then(|ci| {
+                        if ws.clients[ci].withdrawn {
+                            ws.clients[ci].withdrawn = false;
+                            Some(ws.clients[ci].frame)
+                        } else {
+                            None
+                        }
+                    })
+                };
+                if let Some(frame) = withdrawn_frame {
+                    self.conn.map_window(frame)?;
+                    self.conn.map_window(ev.window)?;
+                    log::info!("Deiconified window {:#x}", ev.window);
+                    if let Some((wi, ci)) = self.find_client(ev.window) {
+                        if wi != self.current_workspace {
+                            self.switch_workspace(wi);
+                        }
+                        self.set_focus(ci)?;
+                    }
+                    self.update_ewmh()?;
+                    self.arrange()?;
+                }
+            }
+            return Ok(());
+        }
+
         Ok(())
     }
 
@@ -773,6 +889,7 @@ impl Wm {
                     Err(e) => log::warn!("Failed to spawn {}: {}", cmd, e),
                 }
             }
+            BindingAction::OpenMenu => self.open_menu()?,
             BindingAction::ReloadConfig => {
                 log::info!("Reloading config...");
                 match self.config.reload() {
@@ -796,6 +913,43 @@ impl Wm {
                 }
             }
             BindingAction::Quit => { log::info!("Quitting expiecustWM"); std::process::exit(0); }
+        }
+        Ok(())
+    }
+
+    fn open_menu(&self) -> anyhow::Result<()> {
+        use std::process::{Command, Stdio};
+        if self.config.settings_menu.is_empty() {
+            log::info!("settings_menu is empty, skipping");
+            return Ok(());
+        }
+        let items: String = self.config.settings_menu.iter()
+            .map(|e| e.label.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut child = Command::new("sh")
+            .args(["-c", &format!("rofi -dmenu -p Menu -i -no-custom")])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()?;
+        if let Some(ref mut stdin) = child.stdin {
+            use std::io::Write;
+            stdin.write_all(items.as_bytes())?;
+        }
+        let output = child.wait_with_output()?;
+        if !output.status.success() {
+            return Ok(());
+        }
+        let selected = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if selected.is_empty() {
+            return Ok(());
+        }
+        if let Some(entry) = self.config.settings_menu.iter().find(|e| e.label == selected) {
+            if !entry.command.is_empty() {
+                log::info!("Menu: executing '{}'", entry.command);
+                Command::new("sh").args(["-c", &entry.command]).spawn()?;
+            }
         }
         Ok(())
     }

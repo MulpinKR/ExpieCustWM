@@ -8,6 +8,12 @@ pub struct KeyBinding {
 }
 
 #[derive(Debug, Clone)]
+pub struct MenuEntry {
+    pub label: String,
+    pub command: String,
+}
+
+#[derive(Debug, Clone)]
 pub enum BindingAction {
     FocusNext,
     FocusPrev,
@@ -21,6 +27,7 @@ pub enum BindingAction {
     ViewWorkspace(usize),
     MoveToWorkspace(usize),
     Spawn(String),
+    OpenMenu,
     ReloadConfig,
     Quit,
 }
@@ -41,6 +48,7 @@ pub struct Config {
     pub wallpaper: Option<String>,
     pub wallpaper_color: Option<String>,
     pub keybindings: Vec<KeyBinding>,
+    pub settings_menu: Vec<MenuEntry>,
 }
 
 impl Config {
@@ -115,6 +123,16 @@ impl Config {
                             cfg.wallpaper_color = Some(v);
                         }
                     }
+                    if let Some(arr) = map.get("settings_menu").and_then(|v| v.clone().try_cast::<rhai::Array>()) {
+                        cfg.settings_menu = arr.into_iter().filter_map(|item| {
+                            let map = item.try_cast::<rhai::Map>()?;
+                            let label = map.get("label")?.clone().try_cast::<String>()?;
+                            let command = map.get("command")
+                                .and_then(|v| v.clone().try_cast::<String>())
+                                .unwrap_or_default();
+                            Some(MenuEntry { label, command })
+                        }).collect();
+                    }
                 }
             }
             Err(e) => {
@@ -154,6 +172,7 @@ impl Config {
             wallpaper: None,
             wallpaper_color: None,
             keybindings: default_bindings(),
+            settings_menu: vec![],
         }
     }
 }
@@ -162,6 +181,7 @@ fn default_bindings() -> Vec<KeyBinding> {
     let mut b = vec![
         KeyBinding { mods: vec!["Mod4".into()], key: "Return".into(), action: BindingAction::Spawn("xterm".into()) },
         KeyBinding { mods: vec!["Mod4".into()], key: "d".into(), action: BindingAction::Spawn("dmenu_run".into()) },
+        KeyBinding { mods: vec!["Mod4".into(), "Shift".into()], key: "d".into(), action: BindingAction::OpenMenu },
         KeyBinding { mods: vec!["Mod4".into()], key: "j".into(), action: BindingAction::FocusNext },
         KeyBinding { mods: vec!["Mod4".into()], key: "k".into(), action: BindingAction::FocusPrev },
         KeyBinding { mods: vec!["Mod4".into()], key: "Tab".into(), action: BindingAction::FocusNext },
