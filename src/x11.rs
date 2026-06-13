@@ -189,6 +189,7 @@ pub fn string_to_keysym(s: &str) -> u32 {
         "F4" => 0xffc1, "F5" => 0xffc2, "F6" => 0xffc3,
         "F7" => 0xffc4, "F8" => 0xffc5, "F9" => 0xffc6,
         "F10" => 0xffc7, "F11" => 0xffc8, "F12" => 0xffc9,
+        "Print" => 0xff61,
         "space" => 0x0020,
         s if s.len() == 1 => s.chars().next().unwrap_or(' ') as u32,
         _ => 0,

@@ -611,12 +611,9 @@ impl Wm {
             BindingAction::LayoutMonocle => self.set_layout(LayoutMode::Monocle)?,
             BindingAction::Spawn(cmd) => {
                 log::info!("Spawning: {}", cmd);
-                let parts: Vec<&str> = cmd.split_whitespace().collect();
-                if let Some(prog) = parts.first() {
-                    match Command::new(prog).args(&parts[1..]).spawn() {
-                        Ok(_) => {}
-                        Err(e) => log::warn!("Failed to spawn {}: {}", cmd, e),
-                    }
+                match Command::new("sh").args(["-c", cmd.as_str()]).spawn() {
+                    Ok(_) => {}
+                    Err(e) => log::warn!("Failed to spawn {}: {}", cmd, e),
                 }
             }
             BindingAction::ReloadConfig => {
