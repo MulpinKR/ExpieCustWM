@@ -1,0 +1,12 @@
+[package]
+name = "expiecustwm"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+x11rb = "0.13"
+anyhow = "1"
+log = "0.4"
+env_logger = "0.11"
+rhai = "1.19"
+bytemuck = { version = "1", features = ["extern_crate_alloc"] }
