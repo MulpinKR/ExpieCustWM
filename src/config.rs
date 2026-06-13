@@ -172,6 +172,14 @@ fn default_bindings() -> Vec<KeyBinding> {
         KeyBinding { mods: vec!["Mod4".into(), "Shift".into()], key: "c".into(), action: BindingAction::ReloadConfig },
         KeyBinding { mods: vec!["Mod4".into(), "Shift".into()], key: "p".into(), action: BindingAction::Spawn("maim -s ~/Pictures/Screenshots/screenshot-$(date +%s).png".into()) },
         KeyBinding { mods: vec![], key: "Print".into(), action: BindingAction::Spawn("maim ~/Pictures/Screenshots/screenshot-$(date +%s).png".into()) },
+        KeyBinding { mods: vec![], key: "XF86AudioRaiseVolume".into(), action: BindingAction::Spawn("pactl set-sink-volume @DEFAULT_SINK@ +5%".into()) },
+        KeyBinding { mods: vec![], key: "XF86AudioLowerVolume".into(), action: BindingAction::Spawn("pactl set-sink-volume @DEFAULT_SINK@ -5%".into()) },
+        KeyBinding { mods: vec![], key: "XF86AudioMute".into(), action: BindingAction::Spawn("pactl set-sink-mute @DEFAULT_SINK@ toggle".into()) },
+        KeyBinding { mods: vec![], key: "XF86AudioMicMute".into(), action: BindingAction::Spawn("pactl set-source-mute @DEFAULT_SOURCE@ toggle".into()) },
+        KeyBinding { mods: vec![], key: "XF86MonBrightnessUp".into(), action: BindingAction::Spawn("expiecustwm-brightness up".into()) },
+        KeyBinding { mods: vec![], key: "XF86MonBrightnessDown".into(), action: BindingAction::Spawn("expiecustwm-brightness down".into()) },
+        KeyBinding { mods: vec![], key: "XF86Bluetooth".into(), action: BindingAction::Spawn("expiecustwm-bluetooth toggle".into()) },
+        KeyBinding { mods: vec!["Mod4".into(), "Shift".into()], key: "b".into(), action: BindingAction::Spawn("expiecustwm-bluetooth menu".into()) },
         KeyBinding { mods: vec!["Mod4".into(), "Shift".into()], key: "q".into(), action: BindingAction::Quit },
     ]
 }
