@@ -23,23 +23,56 @@ pub fn set_from_png_bytes(conn: &RustConnection, screen: &Screen, png_data: &[u8
     let img_w = img.width();
     let img_h = img.height();
     let pixels = img.into_raw();
-
     let zdata = rgba_to_zpixmap(&pixels, conn.setup().image_byte_order);
 
-    // Create pixmap and upload wallpaper in strips
-    let pixmap = conn.generate_id()?;
-    conn.create_pixmap(screen.root_depth, pixmap, screen.root, img_w as u16, img_h as u16)?;
+    log::info!("Wallpaper: {}x{} depth={} byte_order={:?} pixels={} zdata={}",
+        img_w, img_h, screen.root_depth, conn.setup().image_byte_order,
+        pixels.len(), zdata.len());
 
-    let gc = conn.generate_id()?;
-    conn.create_gc(gc, pixmap, &CreateGCAux::new())?;
+    // Write wallpaper directly to root window in strips
+    {
+        let gc = conn.generate_id()?;
+        conn.create_gc(gc, screen.root, &CreateGCAux::new()
+            .subwindow_mode(SubwindowMode::INCLUDE_INFERIORS))?;
 
-    let stride = img_w as usize * 4;
-    let max_rows = MAX_PUTIMAGE_BYTES / stride;
-    if max_rows == 0 {
-        anyhow::bail!("Image too wide ({} px)", img_w);
+        let stride = img_w as usize * 4;
+        let max_rows = MAX_PUTIMAGE_BYTES / stride;
+        if max_rows == 0 {
+            anyhow::bail!("Image too wide ({} px)", img_w);
+        }
+
+        let mut n_strips = 0u32;
+        let mut y = 0u32;
+        while y < img_h {
+            let chunk_h = (img_h - y).min(max_rows as u32);
+            let start = y as usize * stride;
+            let end = start + chunk_h as usize * stride;
+            conn.put_image(
+                ImageFormat::Z_PIXMAP,
+                screen.root,
+                gc,
+                img_w as u16,
+                chunk_h as u16,
+                0, y as i16, 0,
+                screen.root_depth,
+                &zdata[start..end],
+            )?;
+            y += chunk_h;
+            n_strips += 1;
+        }
+        conn.free_gc(gc)?;
+        log::info!("Wallpaper: wrote {} strips directly to root window", n_strips);
     }
 
+    // Also set as background_pixmap for Expose repaints
     {
+        let pixmap = conn.generate_id()?;
+        conn.create_pixmap(screen.root_depth, pixmap, screen.root, img_w as u16, img_h as u16)?;
+        let pgc = conn.generate_id()?;
+        conn.create_gc(pgc, pixmap, &CreateGCAux::new())?;
+        let stride = img_w as usize * 4;
+        let max_rows = MAX_PUTIMAGE_BYTES / stride;
+        let mut n_strips = 0u32;
         let mut y = 0u32;
         while y < img_h {
             let chunk_h = (img_h - y).min(max_rows as u32);
@@ -48,37 +81,25 @@ pub fn set_from_png_bytes(conn: &RustConnection, screen: &Screen, png_data: &[u8
             if conn.put_image(
                 ImageFormat::Z_PIXMAP,
                 pixmap,
-                gc,
+                pgc,
                 img_w as u16,
                 chunk_h as u16,
                 0, y as i16, 0,
                 screen.root_depth,
                 &zdata[start..end],
             ).is_err() {
-                log::error!("Failed to upload wallpaper strip at y={}", y);
-                conn.free_gc(gc)?;
-                set_solid(conn, screen, 0x1a1a2e)?;
-                return Ok(());
+                log::error!("Failed to upload pixmap strip at y={}", y);
+                break;
             }
             y += chunk_h;
+            n_strips += 1;
         }
+        conn.free_gc(pgc)?;
+        log::info!("Wallpaper: uploaded {} strips to pixmap", n_strips);
+        conn.change_window_attributes(screen.root, &ChangeWindowAttributesAux::new()
+            .background_pixmap(Pixmap::from(pixmap)))?;
+        conn.clear_area(true, screen.root, 0, 0, 0, 0)?;
     }
-
-    conn.free_gc(gc)?;
-
-    // Draw wallpaper onto root window directly, then set as background
-    let root_gc = conn.generate_id()?;
-    conn.create_gc(root_gc, screen.root, &CreateGCAux::new()
-        .subwindow_mode(SubwindowMode::INCLUDE_INFERIORS))?;
-
-    // Copy pixmap to root window so pixels appear immediately
-    conn.copy_area(pixmap, screen.root, root_gc, 0, 0, 0, 0, img_w as u16, img_h as u16)?;
-    conn.free_gc(root_gc)?;
-
-    // Set as background so Expose events repaint correctly
-    conn.change_window_attributes(screen.root, &ChangeWindowAttributesAux::new()
-        .background_pixmap(Pixmap::from(pixmap)))?;
-    conn.clear_area(true, screen.root, 0, 0, 0, 0)?;
 
     conn.flush()?;
     Ok(())
