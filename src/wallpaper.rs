@@ -1,8 +1,12 @@
-use x11rb::connection::{Connection, RequestConnection};
+use x11rb::connection::Connection;
 use x11rb::protocol::xproto::*;
 use x11rb::rust_connection::RustConnection;
 
 const DEBUG_WALLPAPER: &[u8] = include_bytes!("../assets/debug_wallpaper.png");
+
+/// Max bytes per PutImage request (without BIG-REQUESTS).
+/// u16::MAX * 4 = 262140, minus ~24 bytes header = ~262116 for pixel data.
+const MAX_REQUEST_BYTES: usize = 260_000;
 
 pub fn set_debug(conn: &RustConnection, screen: &Screen) -> anyhow::Result<()> {
     set_from_png_bytes(conn, screen, DEBUG_WALLPAPER)
@@ -22,9 +26,6 @@ pub fn set_from_png_bytes(conn: &RustConnection, screen: &Screen, png_data: &[u8
     let img_h = img.height();
     let pixels = img.into_raw();
 
-    // Negotiate BIG-REQUESTS before sending large PutImage
-    let _max = conn.maximum_request_bytes();
-
     let pixmap = conn.generate_id()?;
     conn.create_pixmap(screen.root_depth, pixmap, screen.root, img_w as u16, img_h as u16)?;
 
@@ -33,17 +34,38 @@ pub fn set_from_png_bytes(conn: &RustConnection, screen: &Screen, png_data: &[u8
 
     let zdata = rgba_to_zpixmap(&pixels, conn.setup().image_byte_order);
 
-    if let Err(e) = conn.put_image(
-        ImageFormat::Z_PIXMAP,
-        pixmap,
-        gc,
-        img_w as u16,
-        img_h as u16,
-        0, 0, 0,
-        screen.root_depth,
-        &zdata,
-    ) {
-        log::error!("Failed to set wallpaper via PutImage: {}. Falling back to solid color.", e);
+    // Split image into horizontal strips, each small enough to fit in
+    // a single PutImage request without BIG-REQUESTS.
+    let stride = img_w as usize * 4; // bytes per row
+    let max_rows_per_chunk = MAX_REQUEST_BYTES / stride;
+    if max_rows_per_chunk == 0 {
+        anyhow::bail!("Image too wide ({} px) to fit in any PutImage request", img_w);
+    }
+
+    let mut ok = true;
+    for y in (0..img_h).step_by(max_rows_per_chunk) {
+        let chunk_h = ((img_h - y) as usize).min(max_rows_per_chunk);
+        let start = y as usize * stride;
+        let end = start + chunk_h * stride;
+        let chunk = &zdata[start..end];
+
+        if conn.put_image(
+            ImageFormat::Z_PIXMAP,
+            pixmap,
+            gc,
+            img_w as u16,
+            chunk_h as u16,
+            0, y as i16, 0,
+            screen.root_depth,
+            chunk,
+        ).is_err() {
+            log::error!("Failed to upload wallpaper strip at y={}", y);
+            ok = false;
+            break;
+        }
+    }
+
+    if !ok {
         conn.free_gc(gc)?;
         set_solid(conn, screen, 0x001a1a2e)?;
         return Ok(());

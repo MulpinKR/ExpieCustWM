@@ -633,6 +633,9 @@ impl Wm {
                         } else {
                             log::info!("Config reloaded successfully");
                         }
+                        if let Err(e) = self.set_wallpaper() {
+                            log::error!("Wallpaper reload failed: {}", e);
+                        }
                         let _ = self.arrange();
                     }
                     Err(e) => log::error!("Failed to reload config: {}", e),
