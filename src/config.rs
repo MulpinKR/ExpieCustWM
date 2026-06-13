@@ -18,6 +18,8 @@ pub enum BindingAction {
     LayoutTiling,
     LayoutFloating,
     LayoutMonocle,
+    ViewWorkspace(usize),
+    MoveToWorkspace(usize),
     Spawn(String),
     ReloadConfig,
     Quit,
@@ -148,7 +150,7 @@ impl Config {
             border_normal: "#222222".into(),
             master_count: 1,
             master_ratio: 0.55,
-            autostart: vec![],
+            autostart: vec!["dunst".into(), "/home/mulpin/.local/bin/expiecustwm-check-update".into()],
             wallpaper: None,
             wallpaper_color: None,
             keybindings: default_bindings(),
@@ -157,7 +159,7 @@ impl Config {
 }
 
 fn default_bindings() -> Vec<KeyBinding> {
-    vec![
+    let mut b = vec![
         KeyBinding { mods: vec!["Mod4".into()], key: "Return".into(), action: BindingAction::Spawn("xterm".into()) },
         KeyBinding { mods: vec!["Mod4".into()], key: "d".into(), action: BindingAction::Spawn("dmenu_run".into()) },
         KeyBinding { mods: vec!["Mod4".into()], key: "j".into(), action: BindingAction::FocusNext },
@@ -181,7 +183,13 @@ fn default_bindings() -> Vec<KeyBinding> {
         KeyBinding { mods: vec![], key: "XF86Bluetooth".into(), action: BindingAction::Spawn("/home/mulpin/.local/bin/expiecustwm-bluetooth toggle".into()) },
         KeyBinding { mods: vec!["Mod4".into(), "Shift".into()], key: "b".into(), action: BindingAction::Spawn("/home/mulpin/.local/bin/expiecustwm-bluetooth menu".into()) },
         KeyBinding { mods: vec!["Mod4".into(), "Shift".into()], key: "q".into(), action: BindingAction::Quit },
-    ]
+    ];
+    for n in 1u32..=9 {
+        let key = n.to_string();
+        b.push(KeyBinding { mods: vec!["Mod4".into()], key: key.clone(), action: BindingAction::ViewWorkspace(n as usize - 1) });
+        b.push(KeyBinding { mods: vec!["Mod4".into(), "Shift".into()], key: key, action: BindingAction::MoveToWorkspace(n as usize - 1) });
+    }
+    b
 }
 
 fn dirs_config_dir() -> Option<PathBuf> {

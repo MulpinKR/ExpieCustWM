@@ -13,13 +13,24 @@ use crate::config::{BindingAction, Config};
 use crate::layout::{Area, LayoutEngine};
 use crate::x11::{self, Atoms};
 
+pub struct Workspace {
+    pub clients: Vec<Client>,
+    pub focus_index: Option<usize>,
+}
+
+impl Workspace {
+    pub fn new() -> Self {
+        Self { clients: Vec::new(), focus_index: None }
+    }
+}
+
 pub struct Wm {
     conn: RustConnection,
     screen_num: usize,
     root: Window,
     atoms: Atoms,
-    clients: Vec<Client>,
-    focus_index: Option<usize>,
+    workspaces: Vec<Workspace>,
+    current_workspace: usize,
     layout: LayoutEngine,
     config: Config,
     bindings: BindingManager,
@@ -47,13 +58,14 @@ impl Wm {
 
         let bindings = BindingManager::new(&config, &conn)?;
 
+        let ws_count = 5;
         let mut wm = Wm {
             conn,
             screen_num,
             root,
             atoms,
-            clients: Vec::new(),
-            focus_index: None,
+            workspaces: (0..ws_count).map(|_| Workspace::new()).collect(),
+            current_workspace: 0,
             layout,
             config,
             bindings,
@@ -63,10 +75,41 @@ impl Wm {
         wm.scan_existing_windows()?;
         wm.update_ewmh()?;
 
-        log::info!("expiecustWM initialized on screen {} ({}x{})",
-            screen_num, screen_width, screen_height);
+        log::info!("expiecustWM {} \"{}\" initialized on screen {} ({}x{}) with {} workspaces",
+            crate::version::VERSION, crate::version::CODENAME,
+            screen_num, screen_width, screen_height, ws_count);
 
         Ok(wm)
+    }
+
+    fn ws(&self) -> &Workspace {
+        &self.workspaces[self.current_workspace]
+    }
+
+    fn ws_mut(&mut self) -> &mut Workspace {
+        &mut self.workspaces[self.current_workspace]
+    }
+
+    fn find_client(&self, window: Window) -> Option<(usize, usize)> {
+        for (wi, ws) in self.workspaces.iter().enumerate() {
+            for (ci, c) in ws.clients.iter().enumerate() {
+                if c.window == window {
+                    return Some((wi, ci));
+                }
+            }
+        }
+        None
+    }
+
+    fn find_client_by_frame(&self, frame: Window) -> Option<(usize, usize)> {
+        for (wi, ws) in self.workspaces.iter().enumerate() {
+            for (ci, c) in ws.clients.iter().enumerate() {
+                if c.frame == frame {
+                    return Some((wi, ci));
+                }
+            }
+        }
+        None
     }
 
     pub fn run(&mut self) -> anyhow::Result<()> {
@@ -213,8 +256,8 @@ impl Wm {
     }
 
     fn update_ewmh(&mut self) -> anyhow::Result<()> {
-        let client_windows: Vec<u32> = self.clients.iter().map(|c| c.window).collect();
-        let stacked: Vec<u32> = self.clients.iter().rev().map(|c| c.window).collect();
+        let client_windows: Vec<u32> = self.ws().clients.iter().map(|c| c.window).collect();
+        let stacked: Vec<u32> = self.ws().clients.iter().rev().map(|c| c.window).collect();
 
         conn_change_property32(
             &self.conn, PropMode::REPLACE, self.root,
@@ -263,12 +306,19 @@ impl Wm {
 
         self.detect_window_type(&mut client)?;
 
-        let idx = self.clients.len();
-        self.clients.push(client);
-
-        if self.focus_index.is_none() {
-            self.focus_index = Some(idx);
-            if let Err(e) = self.clients[idx].focus(&self.conn) {
+        let wi = self.current_workspace;
+        let (should_focus, idx) = {
+            let ws = &mut self.workspaces[wi];
+            let idx = ws.clients.len();
+            ws.clients.push(client);
+            let should = ws.focus_index.is_none();
+            if should {
+                ws.focus_index = Some(idx);
+            }
+            (should, idx)
+        };
+        if should_focus {
+            if let Err(e) = self.workspaces[wi].clients[idx].focus(&self.conn) {
                 log::warn!("Failed to focus new window: {}", e);
             }
         }
@@ -299,26 +349,26 @@ impl Wm {
         Ok(())
     }
 
-    fn unmanage_window(&mut self, idx: usize) -> anyhow::Result<()> {
-        if idx >= self.clients.len() {
+    fn unmanage_window(&mut self, ws_idx: usize, client_idx: usize) -> anyhow::Result<()> {
+        let ws = &mut self.workspaces[ws_idx];
+        if client_idx >= ws.clients.len() {
             return Ok(());
         }
-        let frame = self.clients[idx].frame;
+        let frame = ws.clients[client_idx].frame;
         self.conn.destroy_window(frame)?;
         self.conn.flush()?;
-        self.clients.remove(idx);
+        ws.clients.remove(client_idx);
 
-        if self.clients.is_empty() {
-            self.focus_index = None;
-            // Ensure focus is on root so key grabs can intercept events
+        if ws.clients.is_empty() {
+            ws.focus_index = None;
             self.conn.set_input_focus(InputFocus::POINTER_ROOT, self.root, 0u32)?;
             self.conn.flush()?;
         } else {
-            let new_focus = self.focus_index.map_or(0, |f| {
-                if f >= self.clients.len() { self.clients.len() - 1 } else { f }
+            let new_focus = ws.focus_index.map_or(0, |f| {
+                if f >= ws.clients.len() { ws.clients.len() - 1 } else { f }
             });
-            self.focus_index = Some(new_focus);
-            if let Err(e) = self.clients[new_focus].focus(&self.conn) {
+            ws.focus_index = Some(new_focus);
+            if let Err(e) = ws.clients[new_focus].focus(&self.conn) {
                 log::warn!("Failed to focus after unmanage: {}", e);
             }
         }
@@ -334,10 +384,13 @@ impl Wm {
 
         let area = Area { x: 0, y: bar_top, width: sw, height: sh - bar_top };
         let bw = self.config.border_width;
-        let placements = self.layout.arrange(&self.clients, &area, self.focus_index);
+        let ws = self.ws();
+        let placements = self.layout.arrange(&ws.clients, &area, ws.focus_index);
+        let _ = ws;
 
+        let ws = self.ws();
         for p in &placements {
-            if let Some(client) = self.clients.get(p.client_index) {
+            if let Some(client) = ws.clients.get(p.client_index) {
                 if client.fullscreen {
                     self.conn.configure_window(client.frame, &ConfigureWindowAux::new()
                         .x(0).y(0).width(sw as u32).height(sh as u32))?;
@@ -355,39 +408,46 @@ impl Wm {
     }
 
     fn focus_next(&mut self) -> anyhow::Result<()> {
-        if self.clients.len() < 2 { return Ok(()); }
-        let next = match self.focus_index {
-            Some(i) if i + 1 < self.clients.len() => i + 1,
+        let ws = self.ws();
+        if ws.clients.len() < 2 { return Ok(()); }
+        let next = match ws.focus_index {
+            Some(i) if i + 1 < ws.clients.len() => i + 1,
             _ => 0,
         };
+        let _ = ws;
         self.set_focus(next)
     }
 
     fn focus_prev(&mut self) -> anyhow::Result<()> {
-        if self.clients.len() < 2 { return Ok(()); }
-        let prev = match self.focus_index {
-            Some(0) => self.clients.len() - 1,
+        let ws = self.ws();
+        if ws.clients.len() < 2 { return Ok(()); }
+        let prev = match ws.focus_index {
+            Some(0) => ws.clients.len() - 1,
             Some(i) => i - 1,
             None => 0,
         };
+        let _ = ws;
         self.set_focus(prev)
     }
 
     fn set_focus(&mut self, idx: usize) -> anyhow::Result<()> {
-        if idx >= self.clients.len() { return Ok(()); }
-        if let Some(old) = self.focus_index {
-            if old < self.clients.len() {
-                let _ = self.clients[old].unfocus(&self.conn);
+        let wi = self.current_workspace;
+        let len = self.workspaces[wi].clients.len();
+        if idx >= len { return Ok(()); }
+        let old_focus = self.workspaces[wi].focus_index;
+        if let Some(old) = old_focus {
+            if old < len {
+                let _ = self.workspaces[wi].clients[old].unfocus(&self.conn);
             }
         }
-        self.focus_index = Some(idx);
-        self.clients[idx].focus(&self.conn)?;
+        self.workspaces[wi].focus_index = Some(idx);
+        self.workspaces[wi].clients[idx].focus(&self.conn)?;
         Ok(())
     }
 
     fn toggle_floating(&mut self) -> anyhow::Result<()> {
-        if let Some(idx) = self.focus_index {
-            if let Some(client) = self.clients.get_mut(idx) {
+        if let Some(idx) = self.ws().focus_index {
+            if let Some(client) = self.ws_mut().clients.get_mut(idx) {
                 client.floating = !client.floating;
                 self.arrange()?;
             }
@@ -396,19 +456,23 @@ impl Wm {
     }
 
     fn swap_with_master(&mut self) -> anyhow::Result<()> {
-        if self.clients.len() < 2 { return Ok(()); }
-        let focused = self.focus_index.unwrap_or(0);
+        let ws = self.ws();
+        if ws.clients.len() < 2 { return Ok(()); }
+        let focused = ws.focus_index.unwrap_or(0);
         if focused == 0 { return Ok(()); }
-        self.clients.swap(0, focused);
-        self.focus_index = Some(0);
+        let _ = ws;
+        let ws = self.ws_mut();
+        ws.clients.swap(0, focused);
+        ws.focus_index = Some(0);
         self.arrange()?;
         Ok(())
     }
 
     fn close_focused(&mut self) -> anyhow::Result<()> {
         let mut idx_to_remove = None;
-        if let Some(idx) = self.focus_index {
-            if let Some(client) = self.clients.get(idx) {
+        let ws_idx = self.current_workspace;
+        if let Some(idx) = self.ws().focus_index {
+            if let Some(client) = self.ws().clients.get(idx) {
                 match self.conn.get_window_attributes(client.window)?.reply() {
                     Ok(_) => {
                         client.close(&self.conn, self.atoms.wm_protocols, self.atoms.wm_delete_window)?;
@@ -420,12 +484,13 @@ impl Wm {
             }
         }
         if let Some(idx) = idx_to_remove {
-            let _ = self.conn.destroy_window(self.clients[idx].frame);
-            self.clients.remove(idx);
-            if self.clients.is_empty() {
-                self.focus_index = None;
+            let ws = &mut self.workspaces[ws_idx];
+            let _ = self.conn.destroy_window(ws.clients[idx].frame);
+            ws.clients.remove(idx);
+            if ws.clients.is_empty() {
+                ws.focus_index = None;
             } else {
-                self.focus_index = Some(0);
+                ws.focus_index = Some(0);
             }
             self.update_ewmh()?;
             self.arrange()?;
@@ -439,7 +504,7 @@ impl Wm {
     }
 
     fn handle_map_request(&mut self, ev: MapRequestEvent) -> anyhow::Result<()> {
-        if self.clients.iter().any(|c| c.window == ev.window) {
+        if self.ws().clients.iter().any(|c| c.window == ev.window) {
             return Ok(());
         }
         if self.is_dock_window(ev.window)? {
@@ -474,8 +539,9 @@ impl Wm {
     }
 
     fn handle_configure_request(&mut self, ev: ConfigureRequestEvent) -> anyhow::Result<()> {
-        if let Some(client) = self.clients.iter().find(|c| c.window == ev.window) {
-            if client.floating {
+        let found = self.find_client(ev.window);
+        if let Some((wi, ci)) = found {
+            if self.workspaces[wi].clients[ci].floating {
                 let mut aux = ConfigureWindowAux::new();
                 let vm = ev.value_mask;
                 if (vm & ConfigWindow::X) != ConfigWindow::default() {
@@ -512,15 +578,15 @@ impl Wm {
     }
 
     fn handle_destroy(&mut self, ev: DestroyNotifyEvent) -> anyhow::Result<()> {
-        if let Some(idx) = self.clients.iter().position(|c| c.window == ev.window) {
-            self.unmanage_window(idx)?;
+        if let Some((wi, ci)) = self.find_client(ev.window) {
+            self.unmanage_window(wi, ci)?;
         }
         Ok(())
     }
 
     fn handle_unmap(&mut self, ev: UnmapNotifyEvent) -> anyhow::Result<()> {
-        if let Some(idx) = self.clients.iter().position(|c| c.window == ev.window) {
-            self.unmanage_window(idx)?;
+        if let Some((wi, ci)) = self.find_client(ev.window) {
+            self.unmanage_window(wi, ci)?;
         }
         Ok(())
     }
@@ -545,8 +611,13 @@ impl Wm {
     }
 
     fn handle_button_press(&mut self, ev: ButtonPressEvent) -> anyhow::Result<()> {
-        if let Some(idx) = self.clients.iter().position(|c| c.frame == ev.event) {
-            self.set_focus(idx)?;
+        if let Some((wi, ci)) = self.find_client_by_frame(ev.event) {
+            if wi == self.current_workspace {
+                self.set_focus(ci)?;
+            } else {
+                self.switch_workspace(wi);
+                self.set_focus(ci)?;
+            }
             let state_val: u16 = u16::from(ev.state);
             let mod_val: u16 = u16::from(self.bindings.modifiers);
             if ev.detail == 1 && (state_val & mod_val) != 0 {
@@ -557,8 +628,10 @@ impl Wm {
     }
 
     fn handle_enter(&mut self, ev: EnterNotifyEvent) -> anyhow::Result<()> {
-        if let Some(idx) = self.clients.iter().position(|c| c.frame == ev.event) {
-            self.set_focus(idx)?;
+        if let Some((wi, ci)) = self.find_client_by_frame(ev.event) {
+            if wi == self.current_workspace {
+                self.set_focus(ci)?;
+            }
         }
         Ok(())
     }
@@ -582,9 +655,9 @@ impl Wm {
         if ev.atom != self.atoms.net_wm_window_type {
             return Ok(());
         }
-        let idx = self.clients.iter().position(|c| c.window == ev.window);
-        let idx = match idx { Some(i) => i, None => return Ok(()) };
-        let client = &mut self.clients[idx];
+        let found = self.find_client(ev.window);
+        let (wi, ci) = match found { Some(x) => x, None => return Ok(()) };
+        let client = &mut self.workspaces[wi].clients[ci];
         let reply = self.conn.get_property(
             false, client.window,
             self.atoms.net_wm_window_type,
@@ -612,6 +685,8 @@ impl Wm {
             BindingAction::LayoutTiling => self.set_layout(LayoutMode::Tiling)?,
             BindingAction::LayoutFloating => self.set_layout(LayoutMode::Floating)?,
             BindingAction::LayoutMonocle => self.set_layout(LayoutMode::Monocle)?,
+            BindingAction::ViewWorkspace(n) => self.switch_workspace(*n),
+            BindingAction::MoveToWorkspace(n) => self.move_focused_to_workspace(*n)?,
             BindingAction::Spawn(cmd) => {
                 log::info!("Spawning: {}", cmd);
                 match Command::new("sh").args(["-c", cmd.as_str()]).spawn() {
@@ -643,6 +718,70 @@ impl Wm {
             }
             BindingAction::Quit => { log::info!("Quitting expiecustWM"); std::process::exit(0); }
         }
+        Ok(())
+    }
+
+    fn switch_workspace(&mut self, n: usize) {
+        if n == self.current_workspace || n >= self.workspaces.len() {
+            return;
+        }
+        let old = self.current_workspace;
+        self.current_workspace = n;
+        log::info!("Switch workspace {} -> {}", old, n);
+
+        for c in &self.workspaces[old].clients {
+            let _ = self.conn.unmap_window(c.frame);
+        }
+        for c in &self.workspaces[n].clients {
+            let _ = self.conn.map_window(c.frame);
+        }
+
+        if let Some(idx) = self.workspaces[n].focus_index {
+            let _ = self.workspaces[n].clients[idx].focus(&self.conn);
+        } else {
+            let _ = self.conn.set_input_focus(InputFocus::POINTER_ROOT, self.root, 0u32);
+        }
+
+        let _ = self.update_ewmh();
+        let _ = self.arrange();
+        let _ = self.conn.flush();
+    }
+
+    fn move_focused_to_workspace(&mut self, n: usize) -> anyhow::Result<()> {
+        if n >= self.workspaces.len() || n == self.current_workspace {
+            return Ok(());
+        }
+        let fi = self.ws().focus_index;
+        let idx = match fi { Some(i) => i, None => return Ok(()) };
+        let client = self.ws_mut().clients.remove(idx);
+
+        // update focus in current workspace
+        let old_ws = &mut self.workspaces[self.current_workspace];
+        if old_ws.clients.is_empty() {
+            old_ws.focus_index = None;
+        } else {
+            let new_focus = if idx >= old_ws.clients.len() {
+                old_ws.clients.len() - 1
+            } else {
+                idx
+            };
+            old_ws.focus_index = Some(new_focus);
+        }
+
+        // unmap from current workspace
+        self.conn.unmap_window(client.frame)?;
+
+        // add to target workspace
+        let target = &mut self.workspaces[n];
+        target.clients.push(client);
+        if target.focus_index.is_none() {
+            target.focus_index = Some(target.clients.len() - 1);
+        }
+
+        log::info!("Moved window to workspace {}", n);
+        self.update_ewmh()?;
+        self.arrange()?;
+        self.conn.flush()?;
         Ok(())
     }
 }

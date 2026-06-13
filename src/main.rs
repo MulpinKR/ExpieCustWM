@@ -5,13 +5,14 @@ mod layout;
 mod config;
 mod bindings;
 mod wallpaper;
+mod version;
 
 use log::info;
 
 fn main() -> anyhow::Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
         .init();
-    info!("expiecustWM starting");
+    info!("expiecustWM {} \"{}\" starting", version::VERSION, version::CODENAME);
 
     let cfg = config::Config::load()?;
     let mut window_manager = wm::Wm::new(cfg)?;
