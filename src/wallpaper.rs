@@ -4,9 +4,7 @@ use x11rb::rust_connection::RustConnection;
 
 const DEBUG_WALLPAPER: &[u8] = include_bytes!("../assets/debug_wallpaper.png");
 
-/// Max bytes per PutImage request (without BIG-REQUESTS).
-/// u16::MAX * 4 = 262140, minus ~24 bytes header = ~262116 for pixel data.
-const MAX_REQUEST_BYTES: usize = 260_000;
+const MAX_PUTIMAGE_BYTES: usize = 260_000;
 
 pub fn set_debug(conn: &RustConnection, screen: &Screen) -> anyhow::Result<()> {
     set_from_png_bytes(conn, screen, DEBUG_WALLPAPER)
@@ -26,57 +24,62 @@ pub fn set_from_png_bytes(conn: &RustConnection, screen: &Screen, png_data: &[u8
     let img_h = img.height();
     let pixels = img.into_raw();
 
+    let zdata = rgba_to_zpixmap(&pixels, conn.setup().image_byte_order);
+
+    // Create pixmap and upload wallpaper in strips
     let pixmap = conn.generate_id()?;
     conn.create_pixmap(screen.root_depth, pixmap, screen.root, img_w as u16, img_h as u16)?;
 
     let gc = conn.generate_id()?;
     conn.create_gc(gc, pixmap, &CreateGCAux::new())?;
 
-    let zdata = rgba_to_zpixmap(&pixels, conn.setup().image_byte_order);
-
-    // Split image into horizontal strips, each small enough to fit in
-    // a single PutImage request without BIG-REQUESTS.
-    let stride = img_w as usize * 4; // bytes per row
-    let max_rows_per_chunk = MAX_REQUEST_BYTES / stride;
-    if max_rows_per_chunk == 0 {
-        anyhow::bail!("Image too wide ({} px) to fit in any PutImage request", img_w);
+    let stride = img_w as usize * 4;
+    let max_rows = MAX_PUTIMAGE_BYTES / stride;
+    if max_rows == 0 {
+        anyhow::bail!("Image too wide ({} px)", img_w);
     }
 
-    let mut ok = true;
-    for y in (0..img_h).step_by(max_rows_per_chunk) {
-        let chunk_h = ((img_h - y) as usize).min(max_rows_per_chunk);
-        let start = y as usize * stride;
-        let end = start + chunk_h * stride;
-        let chunk = &zdata[start..end];
-
-        if conn.put_image(
-            ImageFormat::Z_PIXMAP,
-            pixmap,
-            gc,
-            img_w as u16,
-            chunk_h as u16,
-            0, y as i16, 0,
-            screen.root_depth,
-            chunk,
-        ).is_err() {
-            log::error!("Failed to upload wallpaper strip at y={}", y);
-            ok = false;
-            break;
+    {
+        let mut y = 0u32;
+        while y < img_h {
+            let chunk_h = (img_h - y).min(max_rows as u32);
+            let start = y as usize * stride;
+            let end = start + chunk_h as usize * stride;
+            if conn.put_image(
+                ImageFormat::Z_PIXMAP,
+                pixmap,
+                gc,
+                img_w as u16,
+                chunk_h as u16,
+                0, y as i16, 0,
+                screen.root_depth,
+                &zdata[start..end],
+            ).is_err() {
+                log::error!("Failed to upload wallpaper strip at y={}", y);
+                conn.free_gc(gc)?;
+                set_solid(conn, screen, 0x1a1a2e)?;
+                return Ok(());
+            }
+            y += chunk_h;
         }
     }
 
-    if !ok {
-        conn.free_gc(gc)?;
-        set_solid(conn, screen, 0x001a1a2e)?;
-        return Ok(());
-    }
+    conn.free_gc(gc)?;
 
+    // Draw wallpaper onto root window directly, then set as background
+    let root_gc = conn.generate_id()?;
+    conn.create_gc(root_gc, screen.root, &CreateGCAux::new()
+        .subwindow_mode(SubwindowMode::INCLUDE_INFERIORS))?;
+
+    // Copy pixmap to root window so pixels appear immediately
+    conn.copy_area(pixmap, screen.root, root_gc, 0, 0, 0, 0, img_w as u16, img_h as u16)?;
+    conn.free_gc(root_gc)?;
+
+    // Set as background so Expose events repaint correctly
     conn.change_window_attributes(screen.root, &ChangeWindowAttributesAux::new()
         .background_pixmap(Pixmap::from(pixmap)))?;
-
     conn.clear_area(true, screen.root, 0, 0, 0, 0)?;
 
-    conn.free_gc(gc)?;
     conn.flush()?;
     Ok(())
 }
