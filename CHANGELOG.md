@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.0.2 "Dune" (2026-06-13)
+
+### Added
+- Settings menu via rofi (`OpenMenu` action, `Super+Shift+d`)
+- `WM_CHANGE_STATE` handler (iconify/deiconify)
+- `_NET_ACTIVE_WINDOW` handler (window activation from tray)
+- `withdrawn` flag for Client — windows can be hidden without destroying frame
+- GPU module placeholder for polybar
+
+### Fixed
+- Wallpaper: switched to Desktop window (`override_redirect` + `_NET_WM_WINDOW_TYPE_DESKTOP`) — works under picom
+- Tray show/hide: UnmapNotify no longer destroys client window, re-map on MapRequest works
+- Telegram show-from-tray: handled via `WM_CHANGE_STATE` and `_NET_ACTIVE_WINDOW`
+- `eprintln!` replaced with `log::info!` — no buffered output in log
+- Rhai config syntax: nested maps use `#{ }` instead of `{ }`
+
+### Changed
+- Keybindings: `Super+d` → app launcher, `Super+Shift+d` → settings menu
+- Polybar: separators between all right modules, bluetooth script shows BT/ON/BT: name
+- Autostart: added `wireplumber` (PipeWire session manager)
+- Version bumped to 0.0.2, codename "Dune"
+
 ## 0.0.1_5 (2026-06-13)
 
 ### Added
