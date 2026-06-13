@@ -75,6 +75,23 @@ impl Wm {
         std::thread::sleep(std::time::Duration::from_millis(300));
         self.bar_top = self.query_strut_top();
 
+        {
+            let screen = &self.conn.setup().roots[self.screen_num];
+            if let Some(ref color) = self.config.wallpaper_color {
+                let val = u32::from_str_radix(color.trim_start_matches('#'), 16).unwrap_or(0x1a1a2e);
+                crate::wallpaper::set_solid(&self.conn, screen, 0xff000000 | val)?;
+            } else if let Some(ref path) = self.config.wallpaper {
+                let data = std::fs::read(path).unwrap_or_default();
+                if !data.is_empty() {
+                    crate::wallpaper::set_from_png_bytes(&self.conn, screen, &data)?;
+                } else {
+                    log::warn!("Wallpaper file not found: {}", path);
+                }
+            } else {
+                crate::wallpaper::set_default(&self.conn, screen)?;
+            }
+        }
+
         loop {
             let event = match self.conn.wait_for_event() {
                 Ok(ev) => ev,

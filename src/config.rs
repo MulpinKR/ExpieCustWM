@@ -36,6 +36,8 @@ pub struct Config {
     pub master_count: usize,
     pub master_ratio: f64,
     pub autostart: Vec<String>,
+    pub wallpaper: Option<String>,
+    pub wallpaper_color: Option<String>,
     pub keybindings: Vec<KeyBinding>,
 }
 
@@ -101,6 +103,16 @@ impl Config {
                     if let Some(v) = map.get("autostart").and_then(|v| v.clone().try_cast::<rhai::Array>()) {
                         cfg.autostart = v.into_iter().filter_map(|e| e.try_cast::<String>()).collect();
                     }
+                    if let Some(v) = map.get("wallpaper").and_then(|v| v.clone().try_cast::<String>()) {
+                        if !v.is_empty() {
+                            cfg.wallpaper = Some(v);
+                        }
+                    }
+                    if let Some(v) = map.get("wallpaper_color").and_then(|v| v.clone().try_cast::<String>()) {
+                        if !v.is_empty() {
+                            cfg.wallpaper_color = Some(v);
+                        }
+                    }
                 }
             }
             Err(e) => {
@@ -137,6 +149,8 @@ impl Config {
             master_count: 1,
             master_ratio: 0.55,
             autostart: vec![],
+            wallpaper: None,
+            wallpaper_color: None,
             keybindings: default_bindings(),
         }
     }

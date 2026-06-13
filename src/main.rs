@@ -4,6 +4,7 @@ mod client;
 mod layout;
 mod config;
 mod bindings;
+mod wallpaper;
 
 use log::info;
 
