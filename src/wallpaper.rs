@@ -2,10 +2,10 @@ use x11rb::connection::Connection;
 use x11rb::protocol::xproto::*;
 use x11rb::rust_connection::RustConnection;
 
-const DEFAULT_WALLPAPER: &[u8] = include_bytes!("../assets/default_wallpaper.png");
+const DEBUG_WALLPAPER: &[u8] = include_bytes!("../assets/debug_wallpaper.png");
 
-pub fn set_default(conn: &RustConnection, screen: &Screen) -> anyhow::Result<()> {
-    set_from_png_bytes(conn, screen, DEFAULT_WALLPAPER)
+pub fn set_debug(conn: &RustConnection, screen: &Screen) -> anyhow::Result<()> {
+    set_from_png_bytes(conn, screen, DEBUG_WALLPAPER)
 }
 
 pub fn set_from_png_bytes(conn: &RustConnection, screen: &Screen, png_data: &[u8]) -> anyhow::Result<()> {
