@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.0.1_5 (2026-06-13)
+
+### Added
+- Focus-follows-mouse (auto-focus on hover)
+
+### Fixed
+- Rofi monochrome theme: inverted to white bg with black text, removed transparency
+- Launcher changed to `-show drun` (desktop entries instead of PATH)
+- Font changed to DejaVu Sans Mono (Fira Code wasn't installed)
+- Polybar tray reordered: next to BT module with separator
+
 ## 0.0.1 "Cave" (2026-06-13)
 
 ### Added
